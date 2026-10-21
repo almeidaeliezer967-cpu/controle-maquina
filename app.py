@@ -1,23 +1,22 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
+import plotly.express as px
 
 # ---------------------------------------------------------
 # 1. Configuração da Página
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Dashboard de Manutenção Preditiva",
+    page_title="Dashboard de Manutenção Preditiva 3D",
     page_icon="⚙️",
     layout="wide"
 )
 
-st.title("⚙️ Dashboard de Manutenção Preditiva: Detecção de Anomalias")
+st.title("⚙️ Dashboard 3D de Manutenção Preditiva")
 st.markdown("""
-Este aplicativo utiliza o algoritmo **DBSCAN** para identificar comportamentos anômalos em máquinas de chão de fábrica 
-com base em leituras de **Frequência de Vibração** e **Pico de Temperatura**.
+Visualização tridimensional para análise de sensores de chão de fábrica.
+Ajuste os parâmetros do **DBSCAN** na barra lateral para recalcular os agrupamentos e identificar anomalias.
 """)
 
 # ---------------------------------------------------------
@@ -60,7 +59,6 @@ df = gerar_dados()
 # 3. Barra Lateral (Sidebar) - Controles do DBSCAN
 # ---------------------------------------------------------
 st.sidebar.header("🔧 Parâmetros do DBSCAN")
-st.sidebar.markdown("Ajuste os hiperparâmetros para otimizar o agrupamento e a detecção de anomalias.")
 
 eps_val = st.sidebar.slider(
     "Distância Máxima (`eps`):",
@@ -88,79 +86,102 @@ X = df[['Frequencia_Vibracao', 'Pico_Temperatura']]
 dbscan = DBSCAN(eps=eps_val, min_samples=min_samples_val)
 df['Cluster'] = dbscan.fit_predict(X)
 
-# No DBSCAN, o rótulo -1 representa ruídos/outliers
-df['Status'] = df['Cluster'].apply(lambda x: 'Anomalia (Outlier)' if x == -1 else f'Cluster {x}')
+# Status amigável
+df['Status'] = df['Cluster'].apply(lambda x: 'Anomalia (Outlier)' if x == -1 else f'Normal (Cluster {x})')
 
-# Métrica resumo
+# Métricas resumo
 total_anomalias = (df['Cluster'] == -1).sum()
 total_clusters = len(set(df['Cluster'])) - (1 if -1 in df['Cluster'] else 0)
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Total de Máquinas Monitoradas", len(df))
-col2.metric("Clusters Identificados", total_clusters)
+col1.metric("Total de Máquinas", len(df))
+col2.metric("Clusters Operacionais", total_clusters)
 col3.metric("Anomalias Detectadas", total_anomalias, delta_color="inverse")
 
 # ---------------------------------------------------------
-# 5. Gráfico de Dispersão com Seaborn
+# 5. Gráfico 3D Interativo sem Legenda (Plotly)
 # ---------------------------------------------------------
-st.subheader("📊 Mapeamento de Clusters e Anomalias")
+st.subheader("📊 Visualização 3D (Vibração x Temperatura x Cluster)")
 
-fig, ax = plt.subplots(figsize=(10, 6))
-
-# Mapeamento de cores: cinza/tons variados para clusters, preto fixo para anomalias (-1)
+# Mapeamento dinâmico de cores (Preto para outliers / Cluster -1)
 clusters_unicos = sorted(df['Cluster'].unique())
-palette = {}
+color_sequence = px.colors.qualitative.Dark24
+color_map = {}
 
-# Define cores para cada cluster existente
-colors = sns.color_palette("tab10", len(clusters_unicos))
-color_idx = 0
-
+idx_cor = 0
 for c in clusters_unicos:
     if c == -1:
-        palette[c] = "#000000"  # Preto destacado para Outliers
+        color_map[str(c)] = "#000000"  # Preto para Anomalias
     else:
-        palette[c] = colors[color_idx]
-        color_idx += 1
+        color_map[str(c)] = color_sequence[idx_cor % len(color_sequence)]
+        idx_cor += 1
 
-sns.scatterplot(
-    data=df,
+# Convertemos Cluster para string apenas para o mapeamento de cores do Plotly
+df['Cluster_Str'] = df['Cluster'].astype(str)
+
+fig = px.scatter_3d(
+    df,
     x='Frequencia_Vibracao',
     y='Pico_Temperatura',
-    hue='Cluster',
-    style='Status',
-    palette=palette,
-    s=80,
-    alpha=0.85,
-    ax=ax
+    z='Cluster',
+    color='Cluster_Str',
+    color_discrete_map=color_map,
+    hover_name='ID_Maquina',
+    hover_data={
+        'Cluster_Str': False,
+        'Cluster': True,
+        'Frequencia_Vibracao': ':.2f',
+        'Pico_Temperatura': ':.2f',
+        'Status': True
+    },
+    labels={
+        'Frequencia_Vibracao': 'Frequência Vibração (Hz)',
+        'Pico_Temperatura': 'Pico Temperatura (°C)',
+        'Cluster': 'Cluster ID'
+    }
 )
 
-ax.set_title("Frequência de Vibração vs Pico de Temperatura", fontsize=14, fontweight='bold')
-ax.set_xlabel("Frequência de Vibração (Hz)", fontsize=12)
-ax.set_ylabel("Pico de Temperatura (°C)", fontsize=12)
-ax.grid(True, linestyle="--", alpha=0.5)
-
-# Ajuste da legenda
-plt.legend(title="Agrupamentos", bbox_to_anchor=(1.05, 1), loc='upper left')
-
-st.pyplot(fig)
-
-# ---------------------------------------------------------
-# 6. Tabela Interativa de Máquinas Anômalas
-# ---------------------------------------------------------
-st.subheader("🚨 Máquinas Consideradas Anômalas")
-
-df_anomalias = df[df['Cluster'] == -1][['ID_Maquina', 'Frequencia_Vibracao', 'Pico_Temperatura']]
-
-if not df_anomalias.empty:
-    st.warning(f"Foram encontradas **{len(df_anomalias)}** máquinas operando fora dos padrões normais.")
-    
-    st.dataframe(
-        df_anomalias.style.format({
-            'Frequencia_Vibracao': '{:.2f} Hz',
-            'Pico_Temperatura': '{:.2f} °C'
-        }),
-        use_container_width=True,
-        hide_index=True
+# Configurações de layout: remove a legenda e ajusta marcadores
+fig.update_layout(
+    showlegend=False,
+    margin=dict(l=0, r=0, b=0, t=30),
+    scene=dict(
+        xaxis_title='Frequência (Hz)',
+        yaxis_title='Temperatura (°C)',
+        zaxis_title='Cluster ID'
     )
+)
+
+fig.update_traces(
+    marker=dict(size=5, opacity=0.8)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------
+# 6. Tabela Interativa com Filtro de Status
+# ---------------------------------------------------------
+st.subheader("📋 Tabela de Monitoramento de Máquinas")
+
+# Filtro de exibição
+filtro_status = st.radio(
+    "Filtrar exibição da tabela:",
+    options=["Apenas Anomalias", "Apenas Normais", "Todas as Máquinas"],
+    horizontal=True
+)
+
+if filtro_status == "Apenas Anomalias":
+    df_exibicao = df[df['Cluster'] == -1]
+elif filtro_status == "Apenas Normais":
+    df_exibicao = df[df['Cluster'] != -1]
 else:
-    st.success("Nenhuma anomalia foi detectada com os parâmetros atuais do DBSCAN.")
+    df_exibicao = df
+
+st.dataframe(
+    df_exibicao[['ID_Maquina', 'Frequencia_Vibracao', 'Pico_Temperatura', 'Status', 'Cluster']].style.format({
+        'Frequencia_Vibracao': '{:.2f} Hz',
+        'Pico_Temperatura': '{:.2f} °C'
+    }),
+    use_container_width=True,
+    hide_index=True
+)
